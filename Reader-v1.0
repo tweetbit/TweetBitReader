@@ -1,0 +1,107 @@
+#!/usr/bin/python
+# coding: utf-8
+
+import json
+import struct
+import binascii
+import httplib
+import socket
+from httplib import HTTPConnection, HTTPS_PORT
+import ssl
+
+#Modify ssl library to TLSv1 protocol, to allow connection to https://blockchain.info API
+class HTTPSConnection(HTTPConnection):
+    "This class allows communication via SSL."
+    default_port = HTTPS_PORT
+
+    def __init__(self, host, port=None, key_file=None, cert_file=None,
+            strict=None, timeout=socket._GLOBAL_DEFAULT_TIMEOUT,
+            source_address=None):
+        HTTPConnection.__init__(self, host, port, strict, timeout,
+                source_address)
+        self.key_file = key_file
+        self.cert_file = cert_file
+
+    def connect(self):
+        "Connect to a host on a given (SSL) port."
+        sock = socket.create_connection((self.host, self.port),
+                self.timeout, self.source_address)
+        if self._tunnel_host:
+            self.sock = sock
+            self._tunnel()
+        # this is the only line we modified from the httplib.py file
+        # we added the ssl_version variable
+        self.sock = ssl.wrap_socket(sock, self.key_file, self.cert_file, ssl_version=ssl.PROTOCOL_TLSv1)
+
+#now we override the one in httplib
+httplib.HTTPSConnection = HTTPSConnection
+# ssl_version corrections are done
+
+#-------------------------------Start of program--------------------------------
+
+#Location of tweetbit.org's Message Marker
+DecodeTXList = "/unspent?active=3NzqDfCw5HmJmGN3ce34Qk6aMrqNe8ScM5&format=json"
+
+#Obtain list of transactions
+conn = httplib.HTTPSConnection("blockchain.info")
+conn.request("GET", DecodeTXList) 
+TL = conn.getresponse()	
+if TL.status == 200:		
+	transactions = json.loads(TL.read())
+	#Download transaction details
+	for txn in transactions["unspent_outputs"]:
+		print txn['tx_hash_big_endian']
+		conn2 = httplib.HTTPSConnection("blockchain.info")
+		conn2.request("GET", '/rawtx/'+str(txn['tx_hash_big_endian'])+'/') 
+		TD = conn2.getresponse()	
+		if TD.status == 200:			
+			tweet = json.loads(TD.read())
+			conn2.close()
+			messages = []
+			index = []
+			for entry in tweet["out"]:
+				i=0
+				message = entry['script']		
+				if message.find('76a914') == 0:
+					#read into array		
+					message = message[message.find('76a914')+6:message.find('88ac')]
+					index.append(int(message[0:2]))
+					message = message[2:40]
+
+					packed_data = binascii.unhexlify(str(message))
+					s = struct.Struct(str(len(message)/2)+'s')
+					unpacked_data = s.unpack(packed_data)
+					messages.append(str(unpacked_data[0]))
+
+
+			#create message index, and print out
+			i=0
+			for record in index:
+				if record > i:
+					i = record
+
+			ems = ""
+			for x in range(16,i+1):
+				for q, a in zip(index, messages):
+					if  q == x:
+						ms = str('{1}'.format(q,a))
+						ems = ems+ms
+
+			print ems
+
+		else:
+			print "Failed to download txn:"+str(txn['tx_hash_big_endian'])
+	
+	conn2.close()
+
+else:
+	print "Failed to connect to Blockchain.info"
+
+conn.close()
+
+
+
+
+
+
+
